@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBD2 Smart Scanner</title>
+    <style>
+        :root { --neon: #00f2ff; --bg: #0a0a0b; }
+        body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        .header { width: 100%; padding: 20px; text-align: center; border-bottom: 1px solid #333; }
+        .gauge-container { margin-top: 50px; position: relative; width: 250px; height: 250px; border: 5px solid #222; border-radius: 50%; display: flex; justify-content: center; align-items: center; box-shadow: 0 0 20px rgba(0,242,255,0.2); }
+        #rpm-value { font-size: 48px; font-weight: bold; color: var(--neon); }
+        .unit { font-size: 14px; color: #888; margin-top: -10px; }
+        .controls { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 20px; }
+        button { padding: 15px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        .btn-conn { background: var(--neon); color: black; grid-column: span 2; }
+        .btn-diag { background: #333; color: white; }
+        .log-box { width: 90%; height: 150px; background: #000; margin-top: 20px; border-radius: 5px; font-family: monospace; font-size: 12px; padding: 10px; overflow-y: scroll; color: #0f0; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>OBD-II DASHBOARD</h2>
+        <small id="status" style="color: orange;">Disconnected</small>
+    </div>
+
+    <div class="gauge-container">
+        <div>
+            <div id="rpm-value">0</div>
+            <div class="unit">RPM (Eng Speed)</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn-conn" onclick="connect()">CONNECT BLUETOOTH</button>
+        <button class="btn-diag" onclick="sendCommand('0101')">CHECK DTC</button>
+        <button class="btn-diag" onclick="sendCommand('ATZ')">RESET ELM</button>
+    </div>
+
+    <div class="log-box" id="log">Console Ready... logs will appear here.</div>
+
+    <script>
+        let device, server, characteristic;
+        const UUID_SERVICE = '00001101-0000-1000-8000-00805f9b34fb'; // Standard Serial Port
+        const logBox = document.getElementById('log');
+
+        function addLog(msg) {
+            const time = new Date().toLocaleTimeString();
+            logBox.innerHTML += `[${time}] ${msg}<br>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        async function connect() {
+            try {
+                addLog("Searching for OBD-II...");
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'OBD' }, { namePrefix: 'ELM' }],
+                    optionalServices: [UUID_SERVICE]
+                });
+
+                server = await device.gatt.connect();
+                const service = await server.getPrimaryService(UUID_SERVICE);
+                const characteristics = await service.getCharacteristics();
+                characteristic = characteristics[0];
+
+                document.getElementById('status').innerText = "CONNECTED: " + device.name;
+                document.getElementById('status').style.color = "#00ff00";
+                addLog("Connected! Initializing ELM327...");
+
+                // Initial Sequences
+                await sendCommand('ATZ');  // Reset
+                await sendCommand('ATL0'); // Linefeed Off
+                await sendCommand('ATSP0'); // Auto Protocol
+
+                // Start Auto-Polling RPM
+                setInterval(() => { requestRPM(); }, 1000);
+
+            } catch (error) {
+                addLog("Error: " + error);
+            }
+        }
+
+        async function sendCommand(cmd) {
+            if (!characteristic) return;
+            const encoder = new TextEncoder();
+            await characteristic.writeValue(encoder.encode(cmd + '\r'));
+            addLog("Sent: " + cmd);
+        }
+
+        async function requestRPM() {
+            if (!characteristic) return;
+            // Kirim request RPM (01 0C)
+            await sendCommand('010C');
+            
+            // Logika Listen (Read)
+            characteristic.addEventListener('characteristicvaluechanged', handleData);
+            await characteristic.startNotifications();
+        }
+
+        function handleData(event) {
+            let value = new TextDecoder().decode(event.target.value);
+            addLog("Raw Data: " + value);
+
+            // Parsing Sederhana (Contoh: 41 0C 1A F8)
+            // Rumus: ((A*256)+B)/4
+            if(value.includes("41 0C")) {
+                let parts = value.split(" ");
+                let a = parseInt(parts[2], 16);
+                let b = parseInt(parts[3], 16);
+                let rpm = ((a * 256) + b) / 4;
+                document.getElementById('rpm-value').innerText = Math.round(rpm);
+            }
+        }
+    </script>
+</body>
+</html>
